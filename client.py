@@ -1,4 +1,6 @@
 import socket
+import threading
+import sys
 import logging
 
 # Configuración básica del sistema de logs para imprimir mensajes formateados en la consola
@@ -6,65 +8,68 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class SocketClient:
     """
-    Cliente TCP limpio y reutilizable. 
-    Su única responsabilidad es establecer la conexión de red con el servidor,
-    enviar un mensaje y recibir la respuesta correspondiente.
+    Cliente de chat concurrente persistente. 
+    Mantiene una conexión abierta con el servidor y utiliza hilos paralelos para 
+    escribir mensajes por consola y recibir las transmisiones en tiempo real.
     """
-    def __init__(self, host: str, port: int):
-        self._host = host           # Dirección IP del servidor al que nos queremos conectar (ej. '127.0.0.1')
-        self._port = port           # Puerto del servidor (ej. 8080)
-        self._buffer_size = 1024    # Tamaño máximo en bytes que el cliente aceptará leer de golpe en cada respuesta
+    def __init__(self, host: str, port: int, alias: str):
+        self._host = host
+        self._port = port
+        self._alias = alias
+        self._buffer_size = 1024
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    def send_message(self, message: str) -> str:
-        """
-        Conecta con el servidor, envía un mensaje de texto, espera la respuesta 
-        y asegura el cierre de la conexión de forma limpia.
-        """
+    def _receive_messages(self) -> None:
+        """Hilo secundario dedicado exclusivamente a escuchar y mostrar los mensajes del servidor sin bloqueos."""
+        while True:
+            try:
+                response = self._sock.recv(self._buffer_size)
+                if not response:
+                    print("\n[Desconectado]: El servidor ha cerrado la conexión.")
+                    break
+                print(response.decode('utf-8'), end='')
+            except socket.error:
+                print("\n[Error]: Se perdió la conexión con el servidor.")
+                break
+
+    def start(self) -> None:
+        """Conecta al servidor, envía el alias, arranca el hilo de lectura y permite enviar mensajes libremente."""
         try:
-            # Creamos un socket TCP (AF_INET = IPv4, SOCK_STREAM = TCP)
-            # El uso de 'with' (Context Manager) es una buena práctica de Clean Code:
-            # garantiza que el socket se cierre automáticamente al salir del bloque,
-            # incluso si ocurre un error inesperado (evita fugas de descriptores de red).
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                
-                # 1. Conexión: El cliente toca la puerta del servidor en la IP y puerto indicados
-                sock.connect((self._host, self._port))
-                
-                # 2. Envío: Convertimos el string de texto a bytes usando UTF-8 y lo enviamos completo
-                sock.sendall(message.encode('utf-8'))
-                
-                # 3. Recepción: Esperamos la respuesta del servidor (operación bloqueante).
-                # Leemos hasta un máximo de bytes definido por _buffer_size
-                response = sock.recv(self._buffer_size)
-                
-                # 4. Procesamiento de salida: Convertimos los bytes recibidos de vuelta a un string legible
-                return response.decode('utf-8')
-                
+            # 1. Establecemos conexión persistente con el servidor en la LAN
+            self._sock.connect((self._host, self._port))
+            
+            # 2. Enviamos el alias de usuario como primer mensaje obligatorio
+            self._sock.sendall(self._alias.encode('utf-8'))
+            
+            logging.info("Conectado exitosamente al chat. Escribe tus mensajes (o escribe '/salir' para terminar):")
+
+            # 3. Lanzamos el hilo secundario en segundo plano para escuchar respuestas en tiempo real
+            receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
+            receive_thread.start()
+
+            # 4. Bucle principal interactivo para redactar y enviar mensajes en cualquier momento
+            while True:
+                message = input()
+                if message.lower() == '/salir':
+                    break
+                if message.strip():
+                    self._sock.sendall(message.encode('utf-8'))
+
         except socket.error as e:
-            # Capturamos cualquier fallo de red (ej. el servidor está apagado o no hay conexión)
             logging.error(f"Error de comunicación con el servidor: {e}")
-            raise
+        finally:
+            self._sock.close()
+            sys.exit(0)
 
 
 # --- EJECUCIÓN PRINCIPAL DEL CLIENTE ---
 if __name__ == "__main__":
-    # Definimos a qué servidor nos vamos a conectar
-    HOST = '127.0.0.1'  # Localhost (la misma máquina)
-    PORT = 8080         # El mismo puerto en el que está escuchando el servidor
 
-    # Instanciamos nuestro objeto cliente pasándole las coordenadas del servidor
-    client = SocketClient(HOST, PORT)
-    
-    # Lista de mensajes de prueba que queremos enviar al servidor uno por uno
-    messages = ["Hola Servidor", "Sistemas Distribuidos", "Sockets Multihilo en Python"]
-    
-    # Iteramos sobre cada mensaje para realizar una prueba de comunicación
-    for msg in messages:
-        logging.info(f"Enviando: '{msg}'")
-        
-        # Llamamos al método del cliente. Cada llamada abre una conexión nueva,
-        # envía el mensaje, recibe el eco y cierra la conexión automáticamente.
-        reply = client.send_message(msg)
-        
-        # Imprimimos la respuesta obtenida desde el servidor
-        logging.info(f"Respuesta recibida -> {reply}")
+    HOST = '172.17.39.2'
+    PORT = 8888
+    ALIAS = 'Sebas'  
+
+
+    # Instanciamos nuestro objeto cliente pasándole las coordenadas del servidor y el alias
+    client = SocketClient(HOST, PORT, ALIAS)
+    client.start()
