@@ -1,4 +1,4 @@
-Sistema de Chat TCP Multihilo en Red Local (LAN)
+Sistema de Chat Multihilo
 
 Nota: Las diferentes versiones e implementaciones del proyecto estan distribuidas en diferentes ramas de este repositorio.
 
